@@ -85,7 +85,14 @@ STYLE:
 • Premium, royal, confident tone
 • Never robotic, never over-theoretical
 
-When uncertain, say: "Based on available information…" and ask ONE clarifying question if necessary.`;
+When uncertain, say: "Based on available information…" and ask ONE clarifying question if necessary.
+
+DOCUMENT CONTEXT (RAG):
+When document context is provided, you MUST:
+• Base your answers primarily on the provided document chunks
+• Cite which parts of the document support your answer
+• If the answer isn't in the provided context, say so clearly
+• Still apply your legal expertise to explain implications`;
 
 serve(async (req) => {
   // Handle CORS preflight requests
@@ -94,7 +101,7 @@ serve(async (req) => {
   }
 
   try {
-    const { messages, language } = await req.json();
+    const { messages, language, ragContext, documentName } = await req.json();
     
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) {
@@ -102,6 +109,7 @@ serve(async (req) => {
     }
 
     console.log("Processing legal chat request with", messages.length, "messages");
+    console.log("RAG context provided:", ragContext ? "yes" : "no");
 
     // Add language context to system prompt if specified
     let systemPrompt = SYSTEM_PROMPT;
@@ -109,6 +117,20 @@ serve(async (req) => {
       systemPrompt += "\n\nIMPORTANT: The user has selected Tamil. Respond primarily in Tamil (தமிழ்).";
     } else if (language === 'hi') {
       systemPrompt += "\n\nIMPORTANT: The user has selected Hindi. Respond primarily in Hindi (हिंदी).";
+    }
+
+    // Prepare messages with RAG context if available
+    let processedMessages = [...messages];
+    if (ragContext && documentName) {
+      // Inject RAG context before the last user message
+      const lastUserMessageIndex = processedMessages.findLastIndex(m => m.role === 'user');
+      if (lastUserMessageIndex >= 0) {
+        const lastUserMessage = processedMessages[lastUserMessageIndex];
+        processedMessages[lastUserMessageIndex] = {
+          role: 'user',
+          content: `[DOCUMENT CONTEXT from "${documentName}"]\n\n${ragContext}\n\n[END DOCUMENT CONTEXT]\n\nUser Question: ${lastUserMessage.content}`
+        };
+      }
     }
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
@@ -121,7 +143,7 @@ serve(async (req) => {
         model: "google/gemini-2.5-flash",
         messages: [
           { role: "system", content: systemPrompt },
-          ...messages,
+          ...processedMessages,
         ],
         stream: true,
       }),

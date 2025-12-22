@@ -8,12 +8,16 @@ const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/legal-chat`;
 export async function streamChat({
   messages,
   language,
+  ragContext,
+  documentName,
   onDelta,
   onDone,
   onError,
 }: {
   messages: ChatMessage[];
   language: string;
+  ragContext?: string;
+  documentName?: string;
   onDelta: (deltaText: string) => void;
   onDone: () => void;
   onError: (error: string) => void;
@@ -27,7 +31,9 @@ export async function streamChat({
       },
       body: JSON.stringify({ 
         messages: messages.map(m => ({ role: m.role, content: m.content })),
-        language 
+        language,
+        ragContext,
+        documentName,
       }),
     });
 

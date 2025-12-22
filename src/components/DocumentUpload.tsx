@@ -1,13 +1,15 @@
-import { useState, useRef, useCallback } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useState, useRef } from 'react';
+import { motion } from 'framer-motion';
 import { FileUp, X, FileText, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { storeDocumentChunks } from '@/lib/ragService';
+import { isEmbeddingModelLoading } from '@/lib/embeddingService';
 
 interface DocumentUploadProps {
-  onAnalysisComplete: (analysis: string, fileName: string) => void;
+  onAnalysisComplete: (analysis: string, fileName: string, documentId?: string) => void;
   isUploading: boolean;
   setIsUploading: (value: boolean) => void;
 }
@@ -19,6 +21,7 @@ export const DocumentUpload = ({
 }: DocumentUploadProps) => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [statusText, setStatusText] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
   const { language } = useLanguage();
@@ -74,6 +77,7 @@ export const DocumentUpload = ({
 
     setIsUploading(true);
     setUploadProgress(10);
+    setStatusText('Preparing upload...');
 
     try {
       // Get current user
@@ -82,7 +86,8 @@ export const DocumentUpload = ({
         throw new Error('Please log in to upload documents');
       }
 
-      setUploadProgress(30);
+      setUploadProgress(20);
+      setStatusText('Uploading file...');
 
       // Upload to storage
       const filePath = `${user.id}/${Date.now()}-${selectedFile.name}`;
@@ -94,12 +99,49 @@ export const DocumentUpload = ({
         throw uploadError;
       }
 
-      setUploadProgress(50);
+      setUploadProgress(30);
+      setStatusText('Extracting text...');
 
       // Extract text content
       const textContent = await extractTextFromFile(selectedFile);
 
-      setUploadProgress(70);
+      // Save document metadata to database
+      const { data: docData, error: docError } = await supabase
+        .from('documents')
+        .insert({
+          user_id: user.id,
+          file_name: selectedFile.name,
+          file_path: filePath,
+          file_size: selectedFile.size,
+          mime_type: selectedFile.type,
+        })
+        .select()
+        .single();
+
+      if (docError) {
+        throw docError;
+      }
+
+      setUploadProgress(40);
+      setStatusText('Loading AI model...');
+
+      // Generate embeddings and store chunks (RAG)
+      if (textContent && textContent.length > 50) {
+        setStatusText('Generating embeddings...');
+        setUploadProgress(50);
+        
+        try {
+          await storeDocumentChunks(docData.id, user.id, textContent);
+          setUploadProgress(70);
+          setStatusText('Embeddings stored!');
+        } catch (embeddingError) {
+          console.warn('Embedding generation failed, continuing without RAG:', embeddingError);
+          // Continue without RAG if embedding fails
+        }
+      }
+
+      setUploadProgress(80);
+      setStatusText('Analyzing document...');
 
       // Call analyze-document edge function
       const response = await supabase.functions.invoke('analyze-document', {
@@ -107,6 +149,7 @@ export const DocumentUpload = ({
           documentContent: textContent,
           fileName: selectedFile.name,
           language,
+          documentId: docData.id,
         },
       });
 
@@ -114,18 +157,19 @@ export const DocumentUpload = ({
         throw new Error(response.error.message || 'Failed to analyze document');
       }
 
-      setUploadProgress(90);
+      setUploadProgress(95);
+      setStatusText('Finalizing...');
 
-      // Process streaming response
+      // Process response
       if (response.data && typeof response.data === 'object') {
-        // Handle non-streaming response
         const analysis = response.data.choices?.[0]?.message?.content || 
-          'Document uploaded successfully. Analysis complete.';
-        onAnalysisComplete(analysis, selectedFile.name);
+          'Document uploaded and indexed. You can now ask questions about it!';
+        onAnalysisComplete(analysis, selectedFile.name, docData.id);
       } else {
         onAnalysisComplete(
-          `📄 **Document Uploaded: ${selectedFile.name}**\n\nYour document has been uploaded successfully. You can now ask questions about it, and I'll help you understand its legal implications.`,
-          selectedFile.name
+          `📄 **Document Uploaded: ${selectedFile.name}**\n\n✅ Document indexed with ${isEmbeddingModelLoading() ? 'embeddings processing' : 'semantic search enabled'}.\n\nYou can now ask specific questions about this document, and I'll find the most relevant sections to answer you.`,
+          selectedFile.name,
+          docData.id
         );
       }
 
@@ -133,8 +177,8 @@ export const DocumentUpload = ({
       setSelectedFile(null);
       
       toast({
-        title: 'Document uploaded',
-        description: 'Your document has been uploaded and analyzed.',
+        title: 'Document indexed with RAG',
+        description: 'Your document is now searchable with semantic search.',
       });
     } catch (error) {
       console.error('Upload error:', error);
@@ -146,6 +190,7 @@ export const DocumentUpload = ({
     } finally {
       setIsUploading(false);
       setUploadProgress(0);
+      setStatusText('');
     }
   };
 
@@ -179,7 +224,10 @@ export const DocumentUpload = ({
           {isUploading ? (
             <div className="flex items-center gap-2">
               <Loader2 className="w-4 h-4 animate-spin text-gold" />
-              <span className="text-xs text-muted-foreground">{uploadProgress}%</span>
+              <div className="flex flex-col">
+                <span className="text-xs text-muted-foreground">{uploadProgress}%</span>
+                {statusText && <span className="text-xs text-gold">{statusText}</span>}
+              </div>
             </div>
           ) : (
             <>
