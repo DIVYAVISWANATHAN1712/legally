@@ -6,13 +6,16 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import { ChatMessage, Message } from '@/components/ChatMessage';
 import { LanguageToggle } from '@/components/LanguageToggle';
 import { cn } from '@/lib/utils';
+import { streamChat, ChatMessage as ApiMessage } from '@/lib/chatApi';
+import { useToast } from '@/hooks/use-toast';
 
 interface ChatInterfaceProps {
   onBack: () => void;
 }
 
 export const ChatInterface = ({ onBack }: ChatInterfaceProps) => {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
+  const { toast } = useToast();
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
@@ -34,8 +37,20 @@ export const ChatInterface = ({ onBack }: ChatInterfaceProps) => {
     scrollToBottom();
   }, [messages]);
 
+  // Update welcome message when language changes
+  useEffect(() => {
+    setMessages([
+      {
+        id: '1',
+        role: 'assistant',
+        content: t.welcomeMessage,
+        timestamp: new Date(),
+      },
+    ]);
+  }, [t.welcomeMessage]);
+
   const handleSend = async () => {
-    if (!input.trim()) return;
+    if (!input.trim() || isTyping) return;
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -44,22 +59,76 @@ export const ChatInterface = ({ onBack }: ChatInterfaceProps) => {
       timestamp: new Date(),
     };
 
-    setMessages((prev) => [...prev, userMessage]);
+    const newMessages = [...messages, userMessage];
+    setMessages(newMessages);
     setInput('');
     setIsTyping(true);
 
-    // Simulate AI response (replace with actual API call)
-    setTimeout(() => {
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content:
-          'Thank you for your question. As LEGALLY ⚖️, I can help you understand Indian law better. However, to provide you with accurate information, I need to be connected to a backend service. Please enable Lovable Cloud to activate the AI features.',
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, assistantMessage]);
-      setIsTyping(false);
-    }, 1500);
+    let assistantContent = '';
+    const assistantId = (Date.now() + 1).toString();
+
+    // Convert to API format (exclude the welcome message for context)
+    const apiMessages: ApiMessage[] = newMessages
+      .slice(1) // Skip welcome message
+      .map((m) => ({
+        role: m.role,
+        content: m.content,
+      }));
+
+    const updateAssistantMessage = (content: string) => {
+      assistantContent = content;
+      setMessages((prev) => {
+        const lastMsg = prev[prev.length - 1];
+        if (lastMsg?.role === 'assistant' && lastMsg.id === assistantId) {
+          return prev.map((m) =>
+            m.id === assistantId ? { ...m, content: assistantContent } : m
+          );
+        }
+        return [
+          ...prev,
+          {
+            id: assistantId,
+            role: 'assistant' as const,
+            content: assistantContent,
+            timestamp: new Date(),
+          },
+        ];
+      });
+    };
+
+    await streamChat({
+      messages: apiMessages,
+      language,
+      onDelta: (delta) => {
+        assistantContent += delta;
+        updateAssistantMessage(assistantContent);
+      },
+      onDone: () => {
+        setIsTyping(false);
+      },
+      onError: (error) => {
+        setIsTyping(false);
+        toast({
+          title: 'Error',
+          description: error,
+          variant: 'destructive',
+        });
+        // Add error message to chat
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: assistantId,
+            role: 'assistant',
+            content: language === 'ta' 
+              ? 'மன்னிக்கவும், ஒரு பிழை ஏற்பட்டது. தயவுசெய்து மீண்டும் முயற்சிக்கவும்.'
+              : language === 'hi'
+              ? 'क्षमा करें, एक त्रुटि हुई। कृपया पुनः प्रयास करें।'
+              : 'I apologize, but an error occurred. Please try again.',
+            timestamp: new Date(),
+          },
+        ]);
+      },
+    });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -95,7 +164,9 @@ export const ChatInterface = ({ onBack }: ChatInterfaceProps) => {
               <h1 className="font-display font-semibold text-foreground">
                 {t.appName}
               </h1>
-              <p className="text-xs text-muted-foreground">Online</p>
+              <p className="text-xs text-muted-foreground">
+                {isTyping ? 'Typing...' : 'Online'}
+              </p>
             </div>
           </div>
         </div>
@@ -111,7 +182,7 @@ export const ChatInterface = ({ onBack }: ChatInterfaceProps) => {
         </AnimatePresence>
 
         {/* Typing Indicator */}
-        {isTyping && (
+        {isTyping && messages[messages.length - 1]?.role !== 'assistant' && (
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -121,9 +192,18 @@ export const ChatInterface = ({ onBack }: ChatInterfaceProps) => {
               <Sparkles className="w-4 h-4 text-gold animate-pulse" />
             </div>
             <div className="flex gap-1">
-              <span className="w-2 h-2 bg-muted-foreground/50 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-              <span className="w-2 h-2 bg-muted-foreground/50 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-              <span className="w-2 h-2 bg-muted-foreground/50 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+              <span
+                className="w-2 h-2 bg-muted-foreground/50 rounded-full animate-bounce"
+                style={{ animationDelay: '0ms' }}
+              />
+              <span
+                className="w-2 h-2 bg-muted-foreground/50 rounded-full animate-bounce"
+                style={{ animationDelay: '150ms' }}
+              />
+              <span
+                className="w-2 h-2 bg-muted-foreground/50 rounded-full animate-bounce"
+                style={{ animationDelay: '300ms' }}
+              />
             </div>
           </motion.div>
         )}
@@ -176,10 +256,12 @@ export const ChatInterface = ({ onBack }: ChatInterfaceProps) => {
               onKeyDown={handleKeyDown}
               placeholder={t.placeholder}
               rows={1}
+              disabled={isTyping}
               className={cn(
                 'w-full resize-none rounded-2xl border border-border bg-background px-4 py-3 pr-12',
                 'text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-gold/50 focus:border-gold/50',
-                'max-h-32 scrollbar-thin font-body'
+                'max-h-32 scrollbar-thin font-body',
+                'disabled:opacity-50 disabled:cursor-not-allowed'
               )}
               style={{ minHeight: '48px' }}
             />
