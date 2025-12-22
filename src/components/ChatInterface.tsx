@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Sparkles, ArrowLeft, Menu, Scale } from 'lucide-react';
+import { Send, Sparkles, Menu, Scale } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
@@ -11,6 +11,7 @@ import { DocumentUpload } from '@/components/DocumentUpload';
 import { cn } from '@/lib/utils';
 import { streamChat, ChatMessage as ApiMessage } from '@/lib/chatApi';
 import { useToast } from '@/hooks/use-toast';
+import { getRAGContext } from '@/lib/ragService';
 import {
   Conversation,
   createConversation,
@@ -33,6 +34,8 @@ export const ChatInterface = ({ onBack }: ChatInterfaceProps) => {
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+  const [currentDocumentId, setCurrentDocumentId] = useState<string | null>(null);
+  const [currentDocumentName, setCurrentDocumentName] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -86,6 +89,8 @@ export const ChatInterface = ({ onBack }: ChatInterfaceProps) => {
 
   const handleNewConversation = async () => {
     setCurrentConversationId(null);
+    setCurrentDocumentId(null);
+    setCurrentDocumentName(null);
     setMessages([]);
   };
 
@@ -163,6 +168,17 @@ export const ChatInterface = ({ onBack }: ChatInterfaceProps) => {
       content: m.content,
     }));
 
+    // Get RAG context if we have a document
+    let ragContext = '';
+    if (currentDocumentId && user) {
+      try {
+        ragContext = await getRAGContext(userContent, user.id, currentDocumentId, 5);
+        console.log('RAG context retrieved:', ragContext ? 'yes' : 'no');
+      } catch (error) {
+        console.warn('Failed to get RAG context:', error);
+      }
+    }
+
     let assistantContent = '';
     const assistantId = (Date.now() + 1).toString();
 
@@ -190,6 +206,8 @@ export const ChatInterface = ({ onBack }: ChatInterfaceProps) => {
     await streamChat({
       messages: apiMessages,
       language,
+      ragContext: ragContext || undefined,
+      documentName: currentDocumentName || undefined,
       onDelta: (delta) => {
         assistantContent += delta;
         updateAssistantMessage(assistantContent);
@@ -212,7 +230,7 @@ export const ChatInterface = ({ onBack }: ChatInterfaceProps) => {
     });
   };
 
-  const handleDocumentAnalysis = async (analysis: string, fileName: string) => {
+  const handleDocumentAnalysis = async (analysis: string, fileName: string, documentId?: string) => {
     if (!user) return;
 
     let conversationId = currentConversationId;
@@ -224,6 +242,12 @@ export const ChatInterface = ({ onBack }: ChatInterfaceProps) => {
       conversationId = newConv.id;
       setCurrentConversationId(conversationId);
       await loadConversations();
+    }
+
+    // Set document context for RAG
+    if (documentId) {
+      setCurrentDocumentId(documentId);
+      setCurrentDocumentName(fileName);
     }
 
     // Add analysis as assistant message
