@@ -1,8 +1,9 @@
 # Welcome to your Lovable project
 
 ## Project info
+## 🌐 Live Demo
+👉 https://legally-lake.vercel.app
 
-**URL**:  legally-lake.vercel.app
 
 ## How can I edit this code?
 
